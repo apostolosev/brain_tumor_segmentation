@@ -4,10 +4,13 @@ import matplotlib.pyplot as plt
 import SimpleITK as sitk
 import glob
 import os
+from sys import getsizeof
 import numpy as np
 import time
 import cv2
 import pywt
+from random import randint
+from random import seed
 import tensorflow
 import medpy
 
@@ -151,9 +154,97 @@ def resolution_enhancement(input_img, alpha=4):
     return out_img
 
 
+def load_data(data_path):
+    """Function to load the data form the path """
+
+    samples = glob.glob(data_path + '*.npy')
+    x_train = []
+    y_train = []
+
+    iter = 0
+    # For every npy file in the path
+    for spl in samples:
+        iter = iter + 1
+        img = np.load(spl)
+        (x_data, y_data) = patch_extraction(img)
+
+        for k in range(len(y_data)):
+            x_train.append(np.asarray(x_data)[k, :, :])
+            y_train.append(np.asarray(y_data)[k])
+
+    x_train = np.asarray(x_train)
+    y_train = np.asarray(y_train)
+
+    return x_train, y_train
+
+
+def patch_extraction(img, dim=33):
+    """Function to perform random patch extraction from an image"""
+
+    # Get the dimensions of the image
+    height = img.shape[1]
+    width = img.shape[2]
+
+    # Generate random numbers
+    seed(time.time())
+    x_data = []
+    y_data = []
+    max_iter = 20
+    n_iter = 0
+
+    # Get normal tissue cells by sampling randomlly
+    while len(x_data) < 5 and n_iter < max_iter:
+
+        n_iter = n_iter + 1
+        x_idx = randint(0, height)
+        y_idx = randint(0, width)
+
+        if (x_idx < dim / 2) or (height - x_idx < dim / 2):
+            continue
+
+        if (y_idx < dim / 2) or (width - y_idx < dim / 2):
+            continue
+
+        patch = img[0:4, x_idx - int((dim - 1) / 2):x_idx + int((dim - 1) / 2 + 1),
+                y_idx - int((dim - 1) / 2):y_idx + int((dim - 1) / 2 + 1)]
+
+        if np.count_nonzero(patch[0, :, :]) < 0.25 * (dim) ** 2:
+            continue
+
+        x_data.append(patch)
+        y_data.append(img[4, x_idx, y_idx])
+
+    # Get the cancerous cell patches
+    for x_idx in range(0, height, 13):
+        for y_idx in range(0, width, 13):
+
+            if img[4, x_idx, y_idx]:
+
+                if (x_idx < dim / 2) or (height - x_idx < dim / 2):
+                    continue
+
+                if (y_idx < dim / 2) or (width - y_idx < dim / 2):
+                    continue
+
+                patch = img[0:4, x_idx - int((dim - 1) / 2):x_idx + int((dim - 1) / 2 + 1),
+                        y_idx - int((dim - 1) / 2):y_idx + int((dim - 1) / 2 + 1)]
+
+                if np.count_nonzero(patch[0, :, :]) < 0.25 * (dim) ** 2:
+                    continue
+
+                x_data.append(patch)
+                y_data.append(img[4, x_idx, y_idx])
+
+    return x_data, y_data
+
+
 if __name__ == '__main__':
-    img = cv2.imread('/home/apostolos/Downloads/lena.bmp', cv2.IMREAD_GRAYSCALE)
-    out_img = resolution_enhancement(img, alpha=4)
+    (x_train, y_train) = load_data('/home/apostolos/PycharmProjects/TestEnv/data/training_HGG/')
+    print(x_train.dtype)
+    print('Data size in Gb:', getsizeof(x_train))
+    percentages = [0, 0, 0, 0, 0]
 
+    for k in range(len(y_train)):
+        percentages[int(y_train[k])] = percentages[int(y_train[k])] + 1
 
-
+    print(percentages)
