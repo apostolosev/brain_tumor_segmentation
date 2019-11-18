@@ -11,8 +11,11 @@ import cv2
 import pywt
 from random import randint
 from random import seed
-import tensorflow
-import medpy
+from keras.models import Sequential
+from keras.layers import Dense, Conv2D, Flatten
+from keras.layers import Dropout, MaxPool2D, LeakyReLU
+from keras.initializers import Constant
+from keras.optimizers import SGD
 
 
 def preprocess_data(src, dest='/home/apostolos/PycharmProjects/TestEnv/data/training_HGG/'):
@@ -189,11 +192,11 @@ def patch_extraction(img, dim=33):
     seed(time.time())
     x_data = []
     y_data = []
-    max_iter = 20
+    max_iter = 50
     n_iter = 0
 
     # Get normal tissue cells by sampling randomlly
-    while len(x_data) < 5 and n_iter < max_iter:
+    while len(x_data) < 10 and n_iter < max_iter:
 
         n_iter = n_iter + 1
         x_idx = randint(0, height)
@@ -208,8 +211,11 @@ def patch_extraction(img, dim=33):
         patch = img[0:4, x_idx - int((dim - 1) / 2):x_idx + int((dim - 1) / 2 + 1),
                 y_idx - int((dim - 1) / 2):y_idx + int((dim - 1) / 2 + 1)]
 
-        if np.count_nonzero(patch[0, :, :]) < 0.25 * (dim) ** 2:
+        if np.count_nonzero(patch[0, :, :]) < 0.25 * dim ** 2:
             continue
+
+        # Normalization
+        patch = (patch - np.mean(patch)) / np.std(patch)
 
         x_data.append(patch)
         y_data.append(img[4, x_idx, y_idx])
@@ -229,8 +235,11 @@ def patch_extraction(img, dim=33):
                 patch = img[0:4, x_idx - int((dim - 1) / 2):x_idx + int((dim - 1) / 2 + 1),
                         y_idx - int((dim - 1) / 2):y_idx + int((dim - 1) / 2 + 1)]
 
-                if np.count_nonzero(patch[0, :, :]) < 0.25 * (dim) ** 2:
+                if np.count_nonzero(patch[0, :, :]) < 0.25 * dim ** 2:
                     continue
+
+                # Normalization
+                patch = (patch - np.mean(patch)) / np.std(patch)
 
                 x_data.append(patch)
                 y_data.append(img[4, x_idx, y_idx])
@@ -238,13 +247,90 @@ def patch_extraction(img, dim=33):
     return x_data, y_data
 
 
+def neuralnet():
+    """Function to define the CNN architecture"""
+
+    bias_init = Constant(value=0.1)
+    act_func = LeakyReLU(alpha=0.333)
+
+    # create model
+    model = Sequential()
+    model.add(Conv2D(64, kernel_size=3, activation=act_func, border_mode='same', input_shape=(33, 33, 4),
+                     kernel_initializer='glorot_normal', bias_initializer=bias_init))
+    model.add(Conv2D(64, kernel_size=3, activation=act_func, border_mode='same', kernel_initializer='glorot_normal',
+                     bias_initializer=bias_init))
+    model.add(MaxPool2D(pool_size=(3, 3), strides=(2, 2)))
+
+    model.add(Conv2D(128, kernel_size=3, activation=act_func, border_mode='same', kernel_initializer='glorot_normal',
+                     bias_initializer=bias_init))
+    model.add(Conv2D(128, kernel_size=3, activation=act_func, border_mode='same', kernel_initializer='glorot_normal',
+                     bias_initializer=bias_init))
+    model.add(MaxPool2D(pool_size=(3, 3), strides=(2, 2)))
+
+    model.add(Flatten())
+    model.add(Dropout(0.3))
+    model.add(Dense(units=10, activation='sigmoid', kernel_initializer='glorot_normal', bias_initializer=bias_init))
+    model.add(Dropout(0.3))
+    model.add(Dense(units=10, activation='sigmoid', kernel_initializer='glorot_normal', bias_initializer=bias_init))
+    model.add(Dropout(0.3))
+    model.add(Dense(units=5, activation='softmax', kernel_initializer='glorot_normal', bias_initializer=bias_init))
+    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+    return model
+
+
+def display(img):
+    """Function to display the T2 modality of an MRI image with ground truth cancer location"""
+
+    max_val = np.max(img[1, :, :])
+    min_val = np.min(img[1, :, :])
+
+    width = img.shape[1]
+    height = img.shape[2]
+    out_img = np.zeros((width, height, 3), dtype=int)
+
+    # Normalize the input image
+    for x_idx in range(0, width):
+        for y_idx in range(0, height):
+            img[1, x_idx, y_idx] = 255 / (max_val - min_val) * img[1, x_idx, y_idx] - 255 * min_val / (
+                    max_val - min_val)
+
+            if img[4, x_idx, y_idx] == 0:
+                out_img[x_idx, y_idx, 0] = int(img[1, x_idx, y_idx])
+                out_img[x_idx, y_idx, 1] = int(img[1, x_idx, y_idx])
+                out_img[x_idx, y_idx, 2] = int(img[1, x_idx, y_idx])
+            elif img[4, x_idx, y_idx] == 1:
+                out_img[x_idx, y_idx, 0] = 255
+                out_img[x_idx, y_idx, 1] = 0
+                out_img[x_idx, y_idx, 2] = 0
+            elif img[4, x_idx, y_idx] == 2:
+                out_img[x_idx, y_idx, 0] = 0
+                out_img[x_idx, y_idx, 1] = 255
+                out_img[x_idx, y_idx, 2] = 0
+            elif img[4, x_idx, y_idx] == 3:
+                out_img[x_idx, y_idx, 0] = 0
+                out_img[x_idx, y_idx, 1] = 0
+                out_img[x_idx, y_idx, 2] = 255
+            else:
+                out_img[x_idx, y_idx, 0] = 255
+                out_img[x_idx, y_idx, 1] = 255
+                out_img[x_idx, y_idx, 2] = 0
+    f, (ax1, ax2) = plt.subplots(1, 2)
+    ax1.imshow(img[1, :, :], cmap='gray')
+    ax1.set_title('T2 Modality')
+    ax2.imshow(out_img)
+    ax2.set_title('Groud Truth')
+    plt.show()
+
+def train(model, x_train, y_train):
+    """Function to train the CNN """
+
+    sgd = SGD(lr= 0.003, momentum=0.9)
+
+
+
+
+
 if __name__ == '__main__':
-    (x_train, y_train) = load_data('/home/apostolos/PycharmProjects/TestEnv/data/training_HGG/')
-    print(x_train.dtype)
-    print('Data size in Gb:', getsizeof(x_train))
-    percentages = [0, 0, 0, 0, 0]
-
-    for k in range(len(y_train)):
-        percentages[int(y_train[k])] = percentages[int(y_train[k])] + 1
-
-    print(percentages)
+    img = np.load('/home/apostolos/PycharmProjects/TestEnv/data/training_HGG/sample_243.npy')
+    display(img)
