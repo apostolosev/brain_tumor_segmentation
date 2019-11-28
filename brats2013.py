@@ -16,6 +16,7 @@ from keras.layers import Dense, Conv2D, Flatten
 from keras.layers import Dropout, MaxPool2D, LeakyReLU
 from keras.initializers import Constant
 from keras.optimizers import SGD
+from keras import metrics
 
 
 def preprocess_data(src, dest='/home/apostolos/PycharmProjects/TestEnv/data/training_HGG/'):
@@ -127,32 +128,23 @@ def resolution_enhancement(input_img, alpha=4):
     """
 
     # Get the swt coefficients and the corresponding subband images
-    swt_coeffs2 = pywt.swt2(input_img, 'db9', level=1)
-    swt_LL, (swt_LH, swt_HL, swt_HH) = swt_coeffs2[0]
+    shape = input_img.shape
+    print(shape)
+    out_img = np.zeros((alpha * shape[0], alpha * shape[1], shape[2]))
 
-    enh_est_LL = cv2.resize(input_img, None, fx=alpha, fy=alpha, interpolation=cv2.INTER_CUBIC)
-    enh_est_LH = cv2.resize(swt_LH, None, fx=alpha, fy=alpha, interpolation=cv2.INTER_CUBIC)
-    enh_est_HL = cv2.resize(swt_HL, None, fx=alpha, fy=alpha, interpolation=cv2.INTER_CUBIC)
-    enh_est_HH = cv2.resize(swt_HH, None, fx=alpha, fy=alpha, interpolation=cv2.INTER_CUBIC)
+    for i in range(shape[2]):
+        img = input_img[:, :, i]
+        swt_coeffs2 = pywt.swt2(img, 'db9', level=1)
+        swt_LL, (swt_LH, swt_HL, swt_HH) = swt_coeffs2[0]
 
-    coeffs = enh_est_LL, (enh_est_LH, enh_est_HL, enh_est_HH)
+        enh_est_LL = cv2.resize(img, None, fx=alpha, fy=alpha, interpolation=cv2.INTER_CUBIC)
+        enh_est_LH = cv2.resize(swt_LH, None, fx=alpha, fy=alpha, interpolation=cv2.INTER_CUBIC)
+        enh_est_HL = cv2.resize(swt_HL, None, fx=alpha, fy=alpha, interpolation=cv2.INTER_CUBIC)
+        enh_est_HH = cv2.resize(swt_HH, None, fx=alpha, fy=alpha, interpolation=cv2.INTER_CUBIC)
 
-    out_img = pywt.iswt2([coeffs], 'db9')
-    bicubic_enh = cv2.resize(input_img, None, fx=alpha, fy=alpha, interpolation=cv2.INTER_CUBIC)
+        coeffs = enh_est_LL, (enh_est_LH, enh_est_HL, enh_est_HH)
 
-    plt.figure()
-    plt.imshow(input_img, cmap='gray')
-    plt.title('Original image')
-
-    plt.figure()
-    plt.imshow(out_img, cmap='gray')
-    plt.title('Enhanced image')
-
-    plt.figure()
-    plt.imshow(bicubic_enh, cmap='gray')
-    plt.title('Enhanced image using bicubic interpolation')
-
-    plt.show()
+        out_img[:, :, i] = pywt.iswt2([coeffs], 'db9')
 
     return out_img
 
@@ -169,6 +161,7 @@ def load_data(data_path):
     for spl in samples:
         iter = iter + 1
         img = np.load(spl)
+        # img = normalize(img)
         (x_data, y_data) = patch_extraction(img)
 
         for k in range(len(y_data)):
@@ -179,6 +172,29 @@ def load_data(data_path):
     y_train = np.asarray(y_train)
 
     return x_train, y_train
+
+
+def normalize(img):
+    """Function to perform intensity normalization"""
+
+    width = img.shape[1]
+    height = img.shape[2]
+
+    out_img = np.zeros(img.shape)
+
+    for i in range(img.shape[0] - 1):
+
+        max_val = np.max(img[i, :, :])
+        min_val = np.min(img[i, :, :])
+
+        for x_idx in range(0, width):
+            for y_idx in range(0, height):
+                out_img[i, x_idx, y_idx] = 1 / (max_val - min_val) * img[i, x_idx, y_idx] - 1 * min_val / (
+                        max_val - min_val)
+
+    out_img[4, :, :] = img[4, :, :]
+
+    return out_img
 
 
 def patch_extraction(img, dim=33):
@@ -216,9 +232,12 @@ def patch_extraction(img, dim=33):
 
         # Normalization
         patch = (patch - np.mean(patch)) / np.std(patch)
+        patch = np.transpose(patch, (1, 2, 0))
 
         x_data.append(patch)
-        y_data.append(img[4, x_idx, y_idx])
+        prob = np.zeros(5)
+        prob[int(img[4, x_idx, y_idx])] = 1
+        y_data.append(prob)
 
     # Get the cancerous cell patches
     for x_idx in range(0, height, 13):
@@ -240,9 +259,12 @@ def patch_extraction(img, dim=33):
 
                 # Normalization
                 patch = (patch - np.mean(patch)) / np.std(patch)
+                patch = np.transpose(patch, (1, 2, 0))
 
                 x_data.append(patch)
-                y_data.append(img[4, x_idx, y_idx])
+                prob = np.zeros(5)
+                prob[int(img[4, x_idx, y_idx])] = 1
+                y_data.append(prob)
 
     return x_data, y_data
 
@@ -259,8 +281,12 @@ def neuralnet():
                      kernel_initializer='glorot_normal', bias_initializer=bias_init))
     model.add(Conv2D(64, kernel_size=3, activation=act_func, border_mode='same', kernel_initializer='glorot_normal',
                      bias_initializer=bias_init))
+    model.add(Conv2D(64, kernel_size=3, activation=act_func, border_mode='same', kernel_initializer='glorot_normal',
+                     bias_initializer=bias_init))
     model.add(MaxPool2D(pool_size=(3, 3), strides=(2, 2)))
 
+    model.add(Conv2D(128, kernel_size=3, activation=act_func, border_mode='same', kernel_initializer='glorot_normal',
+                     bias_initializer=bias_init))
     model.add(Conv2D(128, kernel_size=3, activation=act_func, border_mode='same', kernel_initializer='glorot_normal',
                      bias_initializer=bias_init))
     model.add(Conv2D(128, kernel_size=3, activation=act_func, border_mode='same', kernel_initializer='glorot_normal',
@@ -269,11 +295,12 @@ def neuralnet():
 
     model.add(Flatten())
     model.add(Dropout(0.3))
-    model.add(Dense(units=10, activation='sigmoid', kernel_initializer='glorot_normal', bias_initializer=bias_init))
+    model.add(Dense(units=256, activation=act_func, kernel_initializer='glorot_normal', bias_initializer=bias_init))
     model.add(Dropout(0.3))
-    model.add(Dense(units=10, activation='sigmoid', kernel_initializer='glorot_normal', bias_initializer=bias_init))
+    model.add(Dense(units=256, activation=act_func, kernel_initializer='glorot_normal', bias_initializer=bias_init))
     model.add(Dropout(0.3))
     model.add(Dense(units=5, activation='softmax', kernel_initializer='glorot_normal', bias_initializer=bias_init))
+
     model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
     return model
@@ -322,15 +349,27 @@ def display(img):
     ax2.set_title('Groud Truth')
     plt.show()
 
-def train(model, x_train, y_train):
-    """Function to train the CNN """
-
-    sgd = SGD(lr= 0.003, momentum=0.9)
-
-
-
-
 
 if __name__ == '__main__':
-    img = np.load('/home/apostolos/PycharmProjects/TestEnv/data/training_HGG/sample_243.npy')
-    display(img)
+    (x_train, y_train) = load_data('/home/apostolos/PycharmProjects/TestEnv/data/training_HGG/')
+    (x_test, y_test) = load_data('/home/apostolos/PycharmProjects/TestEnv/data/testing_HGG/')
+    print(x_train.shape)
+    print(y_train.shape)
+
+    model = neuralnet()
+    model.summary()
+
+    print('# Fit model on training data')
+    history = model.fit(x_train, y_train,
+                        batch_size=128,
+                        epochs=5,
+                        # We pass some validation for
+                        # monitoring validation loss and metrics
+                        # at the end of each epoch
+                        validation_data=(x_test, y_test))
+
+    # The returned "history" object holds a record
+    # of the loss values and metric values during training
+    print('\nhistory dict:', history.history)
+
+    model.save('/home/apostolos/PycharmProjects/TestEnv/cnn_model.h5')
